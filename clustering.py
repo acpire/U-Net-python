@@ -3,6 +3,8 @@
 import numpy as np
 import os 
 import cv2
+from tensorflow import ConfigProto
+from tensorflow import Session
 from PIL import Image
 from skimage import color
 from keras.models import Model
@@ -230,56 +232,103 @@ def make_unet_functions(img_channels, image_rows , image_cols, depth):
     return model
 
 
-def make_unet_200(img_channels, image_rows , image_cols):
-    inputs = Input(( img_channels, image_rows,  image_cols ))
+def Nest_Net(img_rows, img_cols, color_type=1, num_class=1, deep_supervision=False):
+    number_convolutions = 32;
+    step_convolutions = number_convolutions
+    index_convolution = 0
+    index_pool = 0
+    index_upSampling = 0
+    index_concat = 0
 
-    conv1 = Conv2D(25, (3, 3), activation='relu', border_mode='same')(inputs)
-    conv1 = Conv2D(25, (3, 3), activation='relu', border_mode='same')(conv1)
-    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
+    nb_filter = [32,64,128,256,512]
 
-    conv2 = Conv2D(50, (3, 3), activation='relu', border_mode='same')(pool1)
-    conv2 = Conv2D(50, (3, 3), activation='relu', border_mode='same')(conv2)
-    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
+    global bn_axis
+    if K.image_dim_ordering() == 'tf':
+      bn_axis = 3
+      img_input = Input(shape=(img_rows, img_cols, color_type), name='main_input')
+    else:
+      bn_axis = 1
+      img_input = Input(shape=(color_type, img_rows, img_cols), name='main_input')
+      
+    if depth > 0 :
+        convolution_id = np.ndarray((3 + depth * 4), dtype=Conv2D)
+        concat_id = np.ndarray((depth), dtype= np.ndarray)
+        pool_id = np.ndarray((depth), dtype=MaxPooling2D)
+        upSampling_id = np.ndarray((depth), dtype=UpSampling2D)
+        depth = depth - 1
+      
+        x = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(input_tensor)
+        x = Dropout(dropout_rate)(x)
+        x = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(x)
+        x = Dropout(dropout_rate)(x)
+        pool1 = MaxPooling2D((2, 2), strides=(2, 2))(x)
+        number_convolutions+=step_convolution
 
-    conv3 = Conv2D(100, (3, 3), activation='relu', border_mode='same')(pool2)
-    conv3 = Conv2D(100, (3, 3), activation='relu', border_mode='same')(conv3)
-    pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
+        conv2_1 = standard_unit(pool1, stage='21', nb_filter=number_convolutions)
+        pool2 = MaxPooling2D((2, 2), strides=(2, 2), name='pool2')(conv2_1)
+        number_convolutions+=step_convolution
 
+        up1_2 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up12', padding='same')(conv2_1)
+        conv1_2 = concatenate([up1_2, conv1_1], name='merge12', axis=bn_axis)
+        conv1_2 = standard_unit(conv1_2, stage='12', nb_filter=nb_filter[0])
 
-    conv4 = Conv2D(200, (3, 3), activation='relu', border_mode='same')(pool3)
-    conv4 = Conv2D(200, (3, 3), activation='relu', border_mode='same')(conv4)
+        conv3_1 = standard_unit(pool2, stage='31', nb_filter=nb_filter[2])
+        pool3 = MaxPooling2D((2, 2), strides=(2, 2), name='pool3')(conv3_1)
 
-    up5 = UpSampling2D(size=(2, 2))(conv4)
-    up5 = [Conv2D(100, (3, 3), activation='relu', border_mode='same')(up5), conv3]
-    up5 = concatenate(up5, axis=1)
-    
+        up2_2 = Conv2DTranspose(nb_filter[1], (2, 2), strides=(2, 2), name='up22', padding='same')(conv3_1)
+        conv2_2 = concatenate([up2_2, conv2_1], name='merge22', axis=bn_axis)
+        conv2_2 = standard_unit(conv2_2, stage='22', nb_filter=nb_filter[1])
 
-    conv5 = Conv2D(100, (3, 3), activation='relu', border_mode='same')(up5)
-    conv5 = Conv2D(100, (3, 3), activation='relu', border_mode='same')(conv5)
+        up1_3 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up13', padding='same')(conv2_2)
+        conv1_3 = concatenate([up1_3, conv1_1, conv1_2], name='merge13', axis=bn_axis)
+        conv1_3 = standard_unit(conv1_3, stage='13', nb_filter=nb_filter[0])
 
-    
-    up6 =UpSampling2D(size=(2, 2))(conv5)
-    up6 =  [Conv2D(50, (3, 3), activation='relu', border_mode='same')(up6), conv2]
-    up6 = concatenate(up6, axis=1)
+        conv4_1 = standard_unit(pool3, stage='41', nb_filter=nb_filter[3])
+        pool4 = MaxPooling2D((2, 2), strides=(2, 2), name='pool4')(conv4_1)
 
-    conv6 = Conv2D(50, (3, 3), activation='relu', border_mode='same')(up6)
-    conv6 = Conv2D(50, (3, 3), activation='relu', border_mode='same')(conv6)
-    
-    up7 = UpSampling2D(size=(2, 2))(conv6)
-    up7 =  [Conv2D(25, (3, 3), activation='relu', border_mode='same')(up7), conv1]
-    up7 = concatenate(up7, axis=1)
+        up3_2 = Conv2DTranspose(nb_filter[2], (2, 2), strides=(2, 2), name='up32', padding='same')(conv4_1)
+        conv3_2 = concatenate([up3_2, conv3_1], name='merge32', axis=bn_axis)
+        conv3_2 = standard_unit(conv3_2, stage='32', nb_filter=nb_filter[2])
 
-    conv7 = Conv2D(25, (3, 3), activation='relu', border_mode='same')(up7)
-    conv7 = Conv2D(25, (3, 3), activation='relu', border_mode='same')(conv7)
+        up2_3 = Conv2DTranspose(nb_filter[1], (2, 2), strides=(2, 2), name='up23', padding='same')(conv3_2)
+        conv2_3 = concatenate([up2_3, conv2_1, conv2_2], name='merge23', axis=bn_axis)
+        conv2_3 = standard_unit(conv2_3, stage='23', nb_filter=nb_filter[1])
 
+        up1_4 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up14', padding='same')(conv2_3)
+        conv1_4 = concatenate([up1_4, conv1_1, conv1_2, conv1_3], name='merge14', axis=bn_axis)
+        conv1_4 = standard_unit(conv1_4, stage='14', nb_filter=nb_filter[0])
 
-    conv8 = Conv2D(1, 1, 1, activation='sigmoid')(conv7)
+        conv5_1 = standard_unit(pool4, stage='51', nb_filter=nb_filter[4])
 
-    model = Model(input=[inputs], output=[conv8])
+        up4_2 = Conv2DTranspose(nb_filter[3], (2, 2), strides=(2, 2), name='up42', padding='same')(conv5_1)
+        conv4_2 = concatenate([up4_2, conv4_1], name='merge42', axis=bn_axis)
+        conv4_2 = standard_unit(conv4_2, stage='42', nb_filter=nb_filter[3])
 
-    model.compile(optimizer=Adam(lr=1e-4), loss=dice_coef_loss, metrics=[dice_coef])
-    model.summary()
-    
+        up3_3 = Conv2DTranspose(nb_filter[2], (2, 2), strides=(2, 2), name='up33', padding='same')(conv4_2)
+        conv3_3 = concatenate([up3_3, conv3_1, conv3_2], name='merge33', axis=bn_axis)
+        conv3_3 = standard_unit(conv3_3, stage='33', nb_filter=nb_filter[2])
+
+        up2_4 = Conv2DTranspose(nb_filter[1], (2, 2), strides=(2, 2), name='up24', padding='same')(conv3_3)
+        conv2_4 = concatenate([up2_4, conv2_1, conv2_2, conv2_3], name='merge24', axis=bn_axis)
+        conv2_4 = standard_unit(conv2_4, stage='24', nb_filter=nb_filter[1])
+
+        up1_5 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up15', padding='same')(conv2_4)
+        conv1_5 = concatenate([up1_5, conv1_1, conv1_2, conv1_3, conv1_4], name='merge15', axis=bn_axis)
+        conv1_5 = standard_unit(conv1_5, stage='15', nb_filter=nb_filter[0])
+
+        nestnet_output_1 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_1', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_2)
+        nestnet_output_2 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_2', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_3)
+        nestnet_output_3 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_3', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_4)
+        nestnet_output_4 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_4', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_5)
+
+        if deep_supervision:
+            model = Model(input=img_input, output=[nestnet_output_1,
+                                                   nestnet_output_2,
+                                                   nestnet_output_3,
+                                                   nestnet_output_4])
+        else:
+            model = Model(input=img_input, output=[nestnet_output_4])
+
     return model
 
 def get_size(width, height, depth):
@@ -356,7 +405,11 @@ def create_train_data(directory_train, directory_mask):
     image_cols = 200
     train_data_path = os.path.join(directory_train)
     mask_data_path = os.path.join(directory_mask)
-    
+    config = ConfigProto()
+    config.intra_op_parallelism_threads = 44
+    config.inter_op_parallelism_threads = 44
+    Session(config=config)
+
     images = os.listdir(train_data_path)
     total = len(images)    
 
@@ -398,6 +451,12 @@ if __name__ == '__main__':
     print('-'*30)
     print('Loading and preprocessing train data...')
     print('-'*30)
+    config = ConfigProto()
+    config.intra_op_parallelism_threads = 4
+    config.inter_op_parallelism_threads = 4
+    
+    Session(config=config)
+
     imgs_train, imgs_mask_train = create_train_data(directory_train, directory_mask)
     imgs_test, imgs_id_test = load_test_data(directory_test)
 
@@ -431,16 +490,15 @@ if __name__ == '__main__':
     print('Make U-Net...')
     print('-' * 30)
     model = make_unet_functions(1 , width, height, depth)
-    model_checkpoint = ModelCheckpoint('weights.h5', monitor='val_loss', save_best_only=True)
+    model_checkpoint = ModelCheckpoint('weights.h5', monitor='val_loss', verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
     print('-' * 30)
     print('Fit U-Net...')
     print('-' * 30)
-    model.fit(imgs_train, imgs_mask_train, batch_size=1, epochs=120, verbose=1, shuffle=True, validation_split=0.05, callbacks=[tensorboard])
-    model.load_weights('weights.h5')
+    model.fit(imgs_train, imgs_mask_train, batch_size=1, epochs=30, verbose=1, shuffle=True, validation_split=0.05, callbacks=[tensorboard])
+    #model.load_weights('weights.h5')
     print('-' * 30)
     print('Predict U-Net...')
     print('-' * 30)
-    mode
     imgs_mask_test = model.predict(imgs_test, verbose=1)
     np.save('imgs_mask_test.npy', imgs_mask_test)
     print('-' * 30)
