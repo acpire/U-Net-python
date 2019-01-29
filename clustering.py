@@ -1,10 +1,10 @@
 
 
-import numpy as np
-import os 
+import os
 import cv2
-from tensorflow import ConfigProto
-from tensorflow import Session
+import numpy as np
+import numpy
+import tensorflow as tf
 from PIL import Image
 from skimage import color
 from keras.models import Model
@@ -17,32 +17,8 @@ from keras.models import Sequential
 
 K.set_image_data_format('channels_first')
 
-tensorboard = TensorBoard(log_dir='./logs', write_graph=True, write_images = True)
-
-
-
-
-
-def plot(Xs, predictions):
-    nrows = len(Xs)
-    ncols = len(predictions)
-
-    fig = plt.figure(figsize=(16, 8))
-    fig.canvas.set_window_title('Clustering data from ' + URL)
-    for row, (row_label, X_x, X_y) in enumerate(Xs):
-        for col, (col_label, y_pred) in enumerate(predictions):
-            ax = plt.subplot(nrows, ncols, row * ncols + col + 1)
-            if row == 0:
-                plt.title(col_label)
-            if col == 0:
-                plt.ylabel(row_label)
-            plt.scatter(X_x, X_y, c=y_pred.astype(np.float), cmap='prism', alpha=0.5)
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
-    plt.tight_layout()
-    plt.show()
-    plt.close()
-
+#tensorboard = TensorBoard(log_dir='./logs', write_graph=True, write_images = True)
+tensorboard = TensorBoard(log_dir='./logs', histogram_freq=0, batch_size=1, write_graph=True, write_grads=False, write_images=False, embeddings_freq=0, embeddings_layer_names=None, embeddings_metadata=None, embeddings_data=None, update_freq='epoch')
 
 def dice_coef(y_true, y_pred):
     """
@@ -231,104 +207,110 @@ def make_unet_functions(img_channels, image_rows , image_cols, depth):
     
     return model
 
+def sum(n):
+    if n == 0:
+        return 0
+    else:
+        return n + sum(n-1)
 
-def Nest_Net(img_rows, img_cols, color_type=1, num_class=1, deep_supervision=False):
+def Nest_Net(img_rows, img_cols, depth, deep_supervision, color_type=1, num_class=1):
     number_convolutions = 32;
-    step_convolutions = number_convolutions
+    number_conc_convolutions = 32;
+    step_convolution = number_convolutions
     index_convolution = 0
     index_pool = 0
     index_upSampling = 0
     index_concat = 0
+    index_dropout = 0
+    index_convolution_concat = 0
+    dropout_rate = 0.0
 
-    nb_filter = [32,64,128,256,512]
 
-    global bn_axis
+    global data_axis
     if K.image_dim_ordering() == 'tf':
-      bn_axis = 3
-      img_input = Input(shape=(img_rows, img_cols, color_type), name='main_input')
+      data_axis = 3
+      image_input = Input(shape=(img_rows, img_cols, color_type), name='main_input')
     else:
-      bn_axis = 1
-      img_input = Input(shape=(color_type, img_rows, img_cols), name='main_input')
+      data_axis = 1
+      image_input = Input(shape=(color_type, img_rows, img_cols), name='main_input')
       
     if depth > 0 :
-        convolution_id = np.ndarray((3 + depth * 4), dtype=Conv2D)
-        concat_id = np.ndarray((depth), dtype= np.ndarray)
-        pool_id = np.ndarray((depth), dtype=MaxPooling2D)
-        upSampling_id = np.ndarray((depth), dtype=UpSampling2D)
+        number_conv = depth+1
+        number_conv = sum(number_conv)
+        convolution_id = np.ndarray((number_conv * 2), dtype=Conv2D)
+        concat_id = np.ndarray(sum(depth+1) , dtype= np.ndarray)
+        drop_id = np.ndarray((sum(depth+1) *2), dtype=Dropout)
+        pool_id = np.ndarray((depth+1), dtype=MaxPooling2D)
         depth = depth - 1
       
-        x = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(input_tensor)
-        x = Dropout(dropout_rate)(x)
-        x = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(x)
-        x = Dropout(dropout_rate)(x)
-        pool1 = MaxPooling2D((2, 2), strides=(2, 2))(x)
+        convolution_id[index_convolution] = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(image_input)
+        index_convolution += 1
+        convolution_id[index_convolution]  = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(convolution_id[index_convolution - 1])
+        pool_id[index_pool] = MaxPooling2D((2, 2), strides=(2, 2))(convolution_id[index_convolution])
         number_convolutions+=step_convolution
+        index_convolution += 1
+        index_pool += 1
 
-        conv2_1 = standard_unit(pool1, stage='21', nb_filter=number_convolutions)
-        pool2 = MaxPooling2D((2, 2), strides=(2, 2), name='pool2')(conv2_1)
+        for i in range(depth):
+            convolution_id[index_convolution] = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(pool_id[index_pool-1] )
+            index_convolution += 1
+            convolution_id[index_convolution]  = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(convolution_id[index_convolution - 1])
+            pool_id[index_pool] = MaxPooling2D((2, 2), strides=(2, 2))(convolution_id[index_convolution])
+            number_convolutions+=step_convolution
+            index_pool += 1
+            index_convolution += 1
+
+        convolution_id[index_convolution] = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(pool_id[index_pool-1])
+        index_convolution += 1
+        convolution_id[index_convolution]  = Conv2D(number_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(convolution_id[index_convolution - 1])
         number_convolutions+=step_convolution
-
-        up1_2 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up12', padding='same')(conv2_1)
-        conv1_2 = concatenate([up1_2, conv1_1], name='merge12', axis=bn_axis)
-        conv1_2 = standard_unit(conv1_2, stage='12', nb_filter=nb_filter[0])
-
-        conv3_1 = standard_unit(pool2, stage='31', nb_filter=nb_filter[2])
-        pool3 = MaxPooling2D((2, 2), strides=(2, 2), name='pool3')(conv3_1)
-
-        up2_2 = Conv2DTranspose(nb_filter[1], (2, 2), strides=(2, 2), name='up22', padding='same')(conv3_1)
-        conv2_2 = concatenate([up2_2, conv2_1], name='merge22', axis=bn_axis)
-        conv2_2 = standard_unit(conv2_2, stage='22', nb_filter=nb_filter[1])
-
-        up1_3 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up13', padding='same')(conv2_2)
-        conv1_3 = concatenate([up1_3, conv1_1, conv1_2], name='merge13', axis=bn_axis)
-        conv1_3 = standard_unit(conv1_3, stage='13', nb_filter=nb_filter[0])
-
-        conv4_1 = standard_unit(pool3, stage='41', nb_filter=nb_filter[3])
-        pool4 = MaxPooling2D((2, 2), strides=(2, 2), name='pool4')(conv4_1)
-
-        up3_2 = Conv2DTranspose(nb_filter[2], (2, 2), strides=(2, 2), name='up32', padding='same')(conv4_1)
-        conv3_2 = concatenate([up3_2, conv3_1], name='merge32', axis=bn_axis)
-        conv3_2 = standard_unit(conv3_2, stage='32', nb_filter=nb_filter[2])
-
-        up2_3 = Conv2DTranspose(nb_filter[1], (2, 2), strides=(2, 2), name='up23', padding='same')(conv3_2)
-        conv2_3 = concatenate([up2_3, conv2_1, conv2_2], name='merge23', axis=bn_axis)
-        conv2_3 = standard_unit(conv2_3, stage='23', nb_filter=nb_filter[1])
-
-        up1_4 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up14', padding='same')(conv2_3)
-        conv1_4 = concatenate([up1_4, conv1_1, conv1_2, conv1_3], name='merge14', axis=bn_axis)
-        conv1_4 = standard_unit(conv1_4, stage='14', nb_filter=nb_filter[0])
-
-        conv5_1 = standard_unit(pool4, stage='51', nb_filter=nb_filter[4])
-
-        up4_2 = Conv2DTranspose(nb_filter[3], (2, 2), strides=(2, 2), name='up42', padding='same')(conv5_1)
-        conv4_2 = concatenate([up4_2, conv4_1], name='merge42', axis=bn_axis)
-        conv4_2 = standard_unit(conv4_2, stage='42', nb_filter=nb_filter[3])
-
-        up3_3 = Conv2DTranspose(nb_filter[2], (2, 2), strides=(2, 2), name='up33', padding='same')(conv4_2)
-        conv3_3 = concatenate([up3_3, conv3_1, conv3_2], name='merge33', axis=bn_axis)
-        conv3_3 = standard_unit(conv3_3, stage='33', nb_filter=nb_filter[2])
-
-        up2_4 = Conv2DTranspose(nb_filter[1], (2, 2), strides=(2, 2), name='up24', padding='same')(conv3_3)
-        conv2_4 = concatenate([up2_4, conv2_1, conv2_2, conv2_3], name='merge24', axis=bn_axis)
-        conv2_4 = standard_unit(conv2_4, stage='24', nb_filter=nb_filter[1])
-
-        up1_5 = Conv2DTranspose(nb_filter[0], (2, 2), strides=(2, 2), name='up15', padding='same')(conv2_4)
-        conv1_5 = concatenate([up1_5, conv1_1, conv1_2, conv1_3, conv1_4], name='merge15', axis=bn_axis)
-        conv1_5 = standard_unit(conv1_5, stage='15', nb_filter=nb_filter[0])
-
-        nestnet_output_1 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_1', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_2)
-        nestnet_output_2 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_2', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_3)
-        nestnet_output_3 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_3', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_4)
-        nestnet_output_4 = Conv2D(num_class, (1, 1), activation='sigmoid', name='output_4', kernel_initializer = 'he_normal', padding='same', kernel_regularizer=l2(1e-4))(conv1_5)
-
+        index_convolution += 1
+        stride = (depth + 2) * 2
+        offset = 0
+        for j in range(depth+1):
+            for i in range(depth + 1 - j):
+                number_conc_convolutions=step_convolution+step_convolution * i
+                if j == 0:
+                    conc_data = [UpSampling2D(size=(2, 2))(convolution_id[i*2+3])]
+                else:
+                    conc_data = [UpSampling2D(size=(2, 2))(drop_id[i*2+3+offset])]
+                conc_data.append(convolution_id[i*2+1])
+                _stride = (depth + 2) * 2
+                _offset = 0
+                for k in range(j):
+                     conc_data.append(drop_id[i*2+1+_offset])
+                     _stride -= 2
+                     _offset += _stride
+                concat_id[index_concat] = concatenate(conc_data, axis=data_axis)
+                convolution_id[index_convolution] = Conv2D(number_conc_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(concat_id[index_concat])
+                drop_id[index_dropout] = Dropout(dropout_rate)(convolution_id[index_convolution])
+                index_convolution += 1
+                convolution_id[index_convolution]  = Conv2D(number_conc_convolutions, (3, 3), activation="relu", kernel_initializer = 'he_normal', padding='same')(drop_id[index_dropout] )
+                index_dropout += 1
+                drop_id[index_dropout]  = Dropout(dropout_rate)(convolution_id[index_convolution])
+                index_dropout += 1
+                index_convolution += 1
+                index_concat+=1
+            if j > 0:
+                offset += stride
+            stride -= 2
+            
+        _stride = (depth + 2) * 2
+        _offset = 0
+        conc_data=[]
+        for k in range(depth+1):
+             conc_data.append(Conv2D(num_class, (1, 1), activation='sigmoid', padding='same')(drop_id[1+_offset]))
+             _stride -= 2
+             _offset += _stride
+             
         if deep_supervision:
-            model = Model(input=img_input, output=[nestnet_output_1,
-                                                   nestnet_output_2,
-                                                   nestnet_output_3,
-                                                   nestnet_output_4])
+            x = Average()(conc_data)
+            model = Model(input=image_input, output=x)
         else:
-            model = Model(input=img_input, output=[nestnet_output_4])
-
+            model = Model(input=image_input, output=conc_data[depth])
+            
+    model.compile(optimizer=Adam(lr=1e-5), loss=dice_coef_loss, metrics=[dice_coef])
+    model.summary()
     return model
 
 def get_size(width, height, depth):
@@ -387,6 +369,8 @@ def load_test_data(directory):
         image_mask_name = int(i)
         image = cv2.imread(os.path.join(test_data_path, image_name))
         image = cv2.resize(image, (image_rows, image_cols))
+         # image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+         
         image = color.rgb2gray(image)
         image = np.array([image])
         l_0 = np.size(image, 0)
@@ -405,10 +389,6 @@ def create_train_data(directory_train, directory_mask):
     image_cols = 200
     train_data_path = os.path.join(directory_train)
     mask_data_path = os.path.join(directory_mask)
-    config = ConfigProto()
-    config.intra_op_parallelism_threads = 44
-    config.inter_op_parallelism_threads = 44
-    Session(config=config)
 
     images = os.listdir(train_data_path)
     total = len(images)    
@@ -424,8 +404,10 @@ def create_train_data(directory_train, directory_mask):
         if i == int(total):
             return imgs, imgs_mask
         image = cv2.imread(os.path.join(train_data_path, image_name))
+     #     img = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         img = color.rgb2gray(image)
         image = cv2.imread(os.path.join(mask_data_path, image_name))
+       #   img_mask = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         img_mask = color.rgb2gray(image)
 
         img = np.array([img])
@@ -444,18 +426,13 @@ if __name__ == '__main__':
     depth = 3
     width = 200
     height = 200
-    directory_test = r'C:\Users\human\source\repos\ImageRecognition\ImageRecognition\test'
-    directory_train = r'C:\Users\human\source\repos\ImageRecognition\ImageRecognition\train'
-    directory_mask = r'C:\Users\human\source\repos\ImageRecognition\ImageRecognition\segmentation'
-    directory_result = r'C:\Users\human\source\repos\ImageRecognition\ImageRecognition\result'
+    directory_test = r'C:\Users\human\Source\Repos\acpire\U-Net-python\test'
+    directory_train = r'C:\Users\human\Source\Repos\acpire\U-Net-python\train'
+    directory_mask = r'C:\Users\human\Source\Repos\acpire\U-Net-python\segmentation'
+    directory_result = r'C:\Users\human\Source\Repos\acpire\U-Net-python\result'
     print('-'*30)
     print('Loading and preprocessing train data...')
     print('-'*30)
-    config = ConfigProto()
-    config.intra_op_parallelism_threads = 4
-    config.inter_op_parallelism_threads = 4
-    
-    Session(config=config)
 
     imgs_train, imgs_mask_train = create_train_data(directory_train, directory_mask)
     imgs_test, imgs_id_test = load_test_data(directory_test)
@@ -464,15 +441,11 @@ if __name__ == '__main__':
     mean = np.mean(imgs_train) 
     std = np.std(imgs_train)  
     max = np.max(imgs_train)
-   # imgs_train -= mean
-   # imgs_train /= std
 
     imgs_mask_train = imgs_mask_train.astype('float32')
     imgs_test = imgs_test.astype('float32')
     mean = np.mean(imgs_test) 
     std = np.std(imgs_test)  
- #   imgs_test -= mean
-#    imgs_test /= std
 
     
     for image, image_id in zip(imgs_test, imgs_id_test):
@@ -485,30 +458,36 @@ if __name__ == '__main__':
     imgs_train = resize(imgs_train, width, height)
     imgs_mask_train = resize(imgs_mask_train, width, height)
     imgs_test = resize(imgs_test, width, height)
+ 
     
     print('-' * 30)
     print('Make U-Net...')
     print('-' * 30)
     model = make_unet_functions(1 , width, height, depth)
-    model_checkpoint = ModelCheckpoint('weights.h5', monitor='val_loss', verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
+    #model = Nest_Net(width, height, depth, True, color_type=1, num_class=1)
+   # model_checkpoint = ModelCheckpoint('weights.h5', monitor='val_loss', verbose=0, save_best_only=False, save_weights_only=False, mode='auto', period=1)
     print('-' * 30)
     print('Fit U-Net...')
     print('-' * 30)
-    model.fit(imgs_train, imgs_mask_train, batch_size=1, epochs=30, verbose=1, shuffle=True, validation_split=0.05, callbacks=[tensorboard])
+    model.fit(imgs_train, imgs_mask_train, batch_size=1, epochs=250, verbose=1, shuffle=True, validation_split=0.06, callbacks=[tensorboard])
+  #  model.fit(imgs_train, imgs_mask_train, batch_size=1, epochs=40, verbose=1, shuffle=True, validation_split=0.10, callbacks=[tensorboard])
     #model.load_weights('weights.h5')
     print('-' * 30)
     print('Predict U-Net...')
     print('-' * 30)
-    imgs_mask_test = model.predict(imgs_test, verbose=1)
-    np.save('imgs_mask_test.npy', imgs_mask_test)
-    print('-' * 30)
-    print('Saving predicted masks to files...')
-    print('-' * 30)
+   #  imgs_mask_test = model.predict(imgs_test, verbose=1)
     if not os.path.exists(directory_result):
         os.mkdir(directory_result)
-    for image, image_id in zip(imgs_mask_test, imgs_id_test):
+    index =0
+    for one_image in imgs_test:
+        test = np.ndarray((int(1),1, width, height), dtype=np.float_)
+        test[0] = one_image
+        imgs_mask_test = model.predict(test, verbose=1)
+        image = imgs_mask_test
+        image_id = imgs_id_test[index]
+       # for image, image_id in zip(imgs_mask_test, imgs_id_test[index]):
         image = (image[:, :, :] * 255.).astype(np.uint8)
-        image = Image.fromarray(image[0])
-        if image.im != 'RGB':
-            image = image.convert('RGB')
-        image.save(os.path.join(directory_result, str(image_id) + '.png'))
+        _image =cv2.cvtColor(numpy.array(image[0][0]), cv2.COLOR_GRAY2RGB)
+        cv2.imwrite(os.path.join(directory_result, str(image_id) + '.png'), _image)
+     #    image.save(os.path.join(directory_result, str(image_id) + '.png'))
+        index+=1
